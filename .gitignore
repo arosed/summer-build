@@ -1,0 +1,6 @@
+node_modules/
+server/pareto.db
+server/node_modules/
+*.db
+*.db-shm
+*.db-wal
