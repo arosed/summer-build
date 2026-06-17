@@ -1,15 +1,15 @@
 # CLAUDE.md — 1 Qualification
 
-This folder contains the **Pareto Qualification Agent**, a full-stack web app that is the working demo for the Qualification stage of the AM renewal lifecycle (~120 days out).
+This folder contains the **Pareto Qualification Agent**, a full-stack web app demo for the Qualification stage of the AM renewal lifecycle (~120 days out).
 
 ## What this app does
 
-Takes raw, messy CRM + usage data, normalizes it to a canonical schema, runs an XGBoost churn model and a qualification engine, and surfaces each account's renewal signal (churn risk / underutilizing / expansion-ready / healthy) in an interactive dashboard.
+Surfaces renewal signals for ~780 synthetic accounts using a deterministic qualification engine (no ML, no LLM, no onboarding flow). An AM lands directly on a dashboard, simulates daily checks to see which accounts need attention, and can drill through to a Renewal Manager view and per-account Renewal Plans.
 
 ## Structure
 
 ```
-client/   React + Vite + TypeScript + Tailwind + shadcn/ui + framer-motion + recharts
+client/   React + Vite + TypeScript + Tailwind + Framer Motion + Recharts
 server/   Node + Express + SQLite (better-sqlite3) + Drizzle ORM
 ```
 
@@ -24,12 +24,53 @@ npm run dev
 - Client: http://localhost:5173
 - Server: http://localhost:3001
 
-Database seeds automatically on first start (~800 synthetic accounts). Set `ANTHROPIC_API_KEY` in your environment for live LLM streaming; without it the agent falls back to fast pattern matching.
+**If you need to reseed the database**, delete `server/pareto.db` before starting — `CREATE TABLE IF NOT EXISTS` will not add new columns to an existing DB. The seed runs automatically on first start.
 
-## Canonical data schema (frozen — do not rename these fields)
+Set `ANTHROPIC_API_KEY` in your environment for live LLM streaming in the Agent Console; without it the agent falls back to fast pattern matching.
+
+## Demo flow
+
+1. **Dashboard** — opens directly (no setup screens). ~780 accounts sorted by NEW badge, then signal priority. Columns: Account, ARR, Seat Usage bar, Tone pill, Playbook (signal), Reasons.
+2. **Simulate Daily Checks** — re-runs the qualification engine server-side and surfaces the 20 "120-day cohort" accounts + usage outliers (churn < 50%, expansion > 125%) with NEW badges and animation.
+3. **Agent Console** — type threshold changes in plain English (e.g. *"set churn threshold to 40%"*); streams LLM reasoning, updates config in DB, re-runs engine across all accounts.
+4. **Renewal Manager View** — 5 category cards (Churn Risk, Expansion Ready, Flat Renewal, Pricing Upsell, Product Upsell) with current ARR, projected ARR, and delta. Bottom bar shows total current → projected ARR.
+5. **Category drill-down** — account list for one category: ARR, seat usage %, tone, signal, reason, "View Renewal Plan →".
+6. **Renewal Plan** — PDF-aesthetic black-and-white page. Sections: Account Header, Recommendation (templated rationale), Key Metrics (8-cell grid), ARR History chart, Contract History table.
+
+## Qualification engine rules (defaults, all configurable via Agent Console)
+
+| Signal | Trigger | Color | Action |
+|---|---|---|---|
+| `churn_risk` | `seats_active / seat_count < 0.50` | red | Flag Rep |
+| `expansion_ready` | `seats_active / seat_count > 1.25` | green | Upsell Seats |
+| `pricing_upsell` | 120-day cohort + `arr/seat_count < 0.75 × product_median` | amber | Pricing Upsell |
+| `product_upsell` | 120-day cohort + lower-tier product + tone = Positive | green | Product Upsell |
+| `flat_renewal` | 120-day cohort + no other signal | blue | Flat Renewal |
+| `null` | All other accounts | — | No action |
+
+Churn and expansion fire regardless of days-to-renewal. The cohort rules (pricing/product/flat) only fire at exactly `renewal_window_days` (default 120).
+
+**Configurable keys** (stored in `qualification_config` DB table):
+- `churn_usage_threshold` — default 0.50
+- `expansion_usage_threshold` — default 1.25
+- `pricing_upsell_ratio` — default 0.75
+- `renewal_window_days` — default 120
+
+## Seed data shape
+
+- ~760 "bulk" accounts: contract end dates 121–540 days out, never < 120
+- Exactly **20 cohort accounts** at `today + 120 days`: 4 churn, 4 expansion, 4 pricing_upsell, 4 product_upsell, 4 flat_renewal (approximate — exact counts depend on engine thresholds)
+- ~12 usage outliers spread across the bulk set (6 churn < 50%, 6 expansion > 125%)
+- `seat_count`: 5–50, `arr` ≤ $10,000, `monthly_price_per_seat` ≈ $50 ± 30%
+- `tone`: 0 = Bad (~10%), 1 = Neutral (~45%), 2 = Positive (~45%)
+- Products: `Core Platform`, `Growth Suite`, `Enterprise Suite`, `Core Platform + Analytics`
+
+## Canonical account schema
 
 | Field | Type | Notes |
 |---|---|---|
+| `account_id` | string | UUID |
+| `account_name` | string | |
 | `arr` | number | Annual Recurring Revenue |
 | `mrr` | number | Monthly Recurring Revenue |
 | `seat_count` | number | Seats purchased |
@@ -37,50 +78,72 @@ Database seeds automatically on first start (~800 synthetic accounts). Set `ANTH
 | `logins_90d` | number | Login events last 90 days |
 | `support_ticket_count` | number | Open + recent tickets |
 | `num_previous_contracts` | number | Count of prior contracts |
-| `contract_start_date` | date | ISO date |
-| `contract_end_date` | date | ISO date (= renewal date) |
+| `contract_start_date` | string | `YYYY-MM-DD` |
+| `contract_end_date` | string | `YYYY-MM-DD` (= renewal date) |
 | `contract_length_days` | number | Derived from start/end |
 | `tier` | string | Starter / Growth / Enterprise |
-| `product` | string | Product line name |
-| `feature_adoption_score` | number | 0–1 |
-| `churned` | boolean | Ground-truth churn label |
+| `product` | string | Core Platform / Growth Suite / Enterprise Suite / Core Platform + Analytics |
+| `tone` | number | 0 = Bad, 1 = Neutral, 2 = Positive |
 
-Raw synthetic data intentionally uses dirty column names (`monthly_revenue`, `contract_period` as `MM/DD/YYYY - MM/DD/YYYY`) so the normalization agent has something real to extract and map.
-
-## Key server modules
+## Key files
 
 | File | Purpose |
 |---|---|
-| `server/src/engine/engine.ts` | Qualification engine — pure functions, takes account + threshold config, returns signal + reasons |
-| `server/src/ml/churnModel.ts` | XGBoost churn model (binary) + SHAP values |
-| `server/src/normalizer/normalizer.ts` | Schema matching agent — maps raw columns to canonical schema with confidence scores |
-| `server/src/normalizer/transforms.ts` | Field extraction logic (e.g. parse date-range string → start/end/length) |
-| `server/src/db/seed.ts` | Synthetic data generator (~800 accounts, intentionally messy) |
+| `server/src/engine/engine.ts` | Deterministic qualification engine — pure functions, returns signal + reasons |
+| `server/src/engine/engine.test.ts` | 17 unit tests covering all 5 signal types + null + medians + day math |
+| `server/src/db/seed.ts` | Two-phase seed: bulk accounts → compute medians → craft cohort accounts |
 | `server/src/db/schema.ts` | Drizzle ORM schema — source of truth for DB shape |
-| `server/public/sample_column_descriptions.csv` | Sample file for the Setup screen's schema normalization demo |
+| `server/src/db/init.ts` | Creates tables on startup |
+| `server/src/routes/accounts.ts` | REST endpoints: list, simulate-daily, renewal-manager, renewal-plan, historical-arr |
+| `server/src/routes/agent.ts` | SSE endpoint for Agent Console; parses natural language → config updates |
+| `server/src/index.ts` | Server entry: init → seed → run engine → mount routes |
+| `client/src/App.tsx` | Navigation state machine (`Screen` union type — no React Router) |
+| `client/src/lib/api.ts` | Typed API client for all server endpoints |
+| `client/src/components/Dashboard/` | Dashboard, AccountTable, AgentConsole |
+| `client/src/components/RenewalManager/` | RenewalManagerDashboard, RenewalManagerAccountList |
+| `client/src/components/RenewalPlan/RenewalPlanView.tsx` | PDF-aesthetic renewal plan page |
+| `client/src/components/RepBrief/ArrChart.tsx` | ARR trend chart (reused by RenewalPlanView) |
 
-## Demo flow
+## Navigation state machine (App.tsx)
 
-1. **Setup → Connect Data** — simulated CRM + warehouse connection
-2. **Setup → Schema Normalization** — upload (or use sample) `column_descriptions.csv`; agent maps columns live with confidence scores; type a correction in plain English (e.g. *"multiply usage data by 100"*) to watch it recompute
-3. **Dashboard** — account table with qualification signals and churn predictions
-4. **Simulate Daily Checks** — mutates random accounts server-side, re-runs engine, bubbles NEW badges with animation
-5. **Agent Console** — type rule changes in plain English (e.g. *"lower the underutilizing bar to 55%"*); streams reasoning, updates thresholds, re-runs across all accounts
-6. **Rep Brief** — click any account for ARR trend chart, stat cards, upsell section, narrative
-7. **Churn ML modal** — click ML ↗ on a Churn Risk account for SHAP analysis
+```typescript
+type Screen =
+  | { view: 'dashboard' }
+  | { view: 'renewal-manager' }
+  | { view: 'renewal-manager-list'; category: string }
+  | { view: 'renewal-plan'; accountId: string; from: 'dashboard' | 'renewal-manager-list' }
+```
 
-## Qualification engine rules (defaults, all configurable)
+No React Router — `navigate(screen)` is passed as a prop down the tree.
 
-- **Churn Risk (red):** utilization > 100% AND renewal < 30 days, OR near-zero logins in last 14 days
-- **Underutilizing (amber):** `seatsActive / seatsPurchased < 0.75` (threshold is configurable via Agent Console)
-- **Expansion Ready (green):** sustained utilization ≥ 100%, or new feature released since last renewal, or ARR above product median
-- **Renewal Prep (amber):** inside 120-day renewal window
-- **Healthy (green):** everything else
+## ARR projection multipliers (renewal-manager endpoint)
+
+| Signal | Multiplier |
+|---|---|
+| `churn_risk` | × 0 (lost) |
+| `expansion_ready` | × 1.25 |
+| `flat_renewal` | × 1.0 |
+| `pricing_upsell` | × 1.15 |
+| `product_upsell` | × 1.20 |
+
+## Date math gotcha
+
+All day calculations use **UTC date-only** math to avoid timezone off-by-ones:
+
+```typescript
+const end = new Date(endDate + 'T00:00:00Z');
+const now = new Date();
+const todayUTC = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+return Math.round((end.getTime() - todayUTC) / 86400000);
+```
+
+Both seed and engine use this pattern. The 120-day cohort match (`days === 120`) is exact.
 
 ## Tests
 
 ```bash
-npm test
+cd "1 Qualification/server"
+npx vitest run
 ```
 
-Unit tests cover the qualification engine (`engine.test.ts`), churn model (`model.test.ts`), and schema normalizer (`normalizer.test.ts`).
+17 tests in `engine.test.ts`. No other test files — the old `model.test.ts` and `normalizer.test.ts` were deleted with the ML/normalizer code.

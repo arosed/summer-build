@@ -17,51 +17,40 @@ export interface Account {
   product: string;
   feature_adoption_score: number;
   churned: number;
+  tone: number;
+  tone_label?: string;
   // from qualification_results
-  signal?: string;
+  signal?: 'churn_risk' | 'expansion_ready' | 'pricing_upsell' | 'product_upsell' | 'flat_renewal' | null;
   status_color?: string;
   recommended_action?: string;
   reasons?: string[];
   is_new?: number;
   updated_at?: string;
-  // from churn_predictions
-  churn_probability?: number;
-  churned_predicted?: number;
-}
-
-export interface MappingResult {
-  canonical_field: string;
-  raw_column: string | null;
-  confidence: number;
-  transform_fn_code: string;
-  transform_description: string;
 }
 
 export interface HistoricalArr {
-  id: number;
+  id?: number;
   account_id: string;
   quarter: string;
   arr: number;
 }
 
-export interface ModelInfo {
-  accuracy: number;
-  training_size: number;
-  features: string[];
-  threshold: number;
-  n_estimators: number;
+export interface RenewalManagerCategory {
+  signal: string;
+  count: number;
+  currentArr: number;
+  projectedArr: number;
 }
 
-export interface ChurnPrediction {
-  account_id: string;
-  churn_probability: number;
-  churned_predicted: number;
-  feature1_name: string | null;
-  feature1_shap: number | null;
-  feature1_direction: string | null;
-  feature2_name: string | null;
-  feature2_shap: number | null;
-  feature2_direction: string | null;
+export interface RenewalManagerData {
+  categories: RenewalManagerCategory[];
+  totalArr: number;
+  projectedArr: number;
+}
+
+export interface RenewalPlanAccount extends Account {
+  historical_arr: HistoricalArr[];
+  product_median_arr_per_seat: number;
 }
 
 export async function streamSSE(
@@ -96,37 +85,14 @@ export async function streamSSE(
 }
 
 export const api = {
-  setup: {
-    useSample: () =>
-      fetch(`${API}/setup/use-sample`, { method: 'POST' }),
-    uploadDescriptions: (file: File) => {
-      const form = new FormData();
-      form.append('file', file);
-      return fetch(`${API}/setup/upload-descriptions`, { method: 'POST', body: form });
-    },
-    normalizationStatus: (): Promise<MappingResult[]> =>
-      fetch(`${API}/setup/normalization-status`).then((r) => r.json()),
-    editNormalization: (instruction: string) =>
-      fetch(`${API}/setup/edit-normalization`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instruction }),
-      }),
-    confirm: (): Promise<{ success: boolean; accountCount: number }> =>
-      fetch(`${API}/setup/confirm`, { method: 'POST' }).then((r) => r.json()),
-  },
   accounts: {
     list: (): Promise<Account[]> => fetch(`${API}/accounts`).then((r) => r.json()),
-    get: (id: string): Promise<Account> => fetch(`${API}/accounts/${id}`).then((r) => r.json()),
-    historicalArr: (id: string): Promise<HistoricalArr[]> =>
-      fetch(`${API}/accounts/${id}/historical-arr`).then((r) => r.json()),
     simulateDaily: (): Promise<{ changed: string[] }> =>
       fetch(`${API}/accounts/simulate-daily`, { method: 'POST' }).then((r) => r.json()),
-  },
-  churn: {
-    modelInfo: (): Promise<ModelInfo> => fetch(`${API}/churn/model-info`).then((r) => r.json()),
-    predict: (id: string): Promise<ChurnPrediction> =>
-      fetch(`${API}/churn/${id}`).then((r) => r.json()),
+    renewalManager: (): Promise<RenewalManagerData> =>
+      fetch(`${API}/accounts/renewal-manager`).then((r) => r.json()),
+    renewalPlan: (id: string): Promise<RenewalPlanAccount> =>
+      fetch(`${API}/accounts/${id}/renewal-plan`).then((r) => r.json()),
   },
   agent: {
     qualifyInstruction: (instruction: string) =>
@@ -134,12 +100,6 @@ export const api = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ instruction }),
-      }),
-    repBrief: (account_id: string, instruction?: string) =>
-      fetch(`${API}/agent/rep-brief`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account_id, instruction }),
       }),
   },
 };

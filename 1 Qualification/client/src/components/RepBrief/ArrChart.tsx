@@ -9,8 +9,7 @@ interface Props {
 }
 
 function formatQ(quarter: string): string {
-  const [year, q] = quarter.split('-');
-  return `${q} '${year.slice(2)}`;
+  return `'${quarter.slice(2, 4)}`; // "2025" → "'25"
 }
 
 function formatArrK(value: number): string {

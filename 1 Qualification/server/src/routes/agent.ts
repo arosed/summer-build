@@ -25,32 +25,34 @@ export function agentRouter(runEngine: () => Promise<void>) {
     const lower = instruction.toLowerCase();
     const updates: Record<string, number> = {};
 
-    // underutilizing threshold patterns
-    const utilMatch = lower.match(/(?:lower|set|change|reduce).*?(?:underutil|utiliz).*?(?:to|at|bar to)\s+(\d+(?:\.\d+)?)\s*%?/);
-    if (utilMatch) {
-      let val = parseFloat(utilMatch[1]);
-      if (val > 1) val = val / 100; // convert % to decimal
-      updates['underutilizing_threshold'] = val;
+    // churn usage threshold
+    const churnMatch = lower.match(/(?:churn|usage).*?(?:threshold|to|at|below)\s+(\d+(?:\.\d+)?)\s*%?/);
+    if (churnMatch) {
+      let val = parseFloat(churnMatch[1]);
+      if (val > 1) val = val / 100;
+      updates['churn_usage_threshold'] = val;
     }
 
-    // renewal window patterns
+    // expansion threshold
+    const expansionMatch = lower.match(/(?:expansion|upsell|capacity).*?(?:threshold|at|to)\s+(\d+(?:\.\d+)?)\s*%?/);
+    if (expansionMatch) {
+      let val = parseFloat(expansionMatch[1]);
+      if (val > 1) val = val / 100;
+      updates['expansion_usage_threshold'] = val;
+    }
+
+    // renewal window
     const renewalMatch = lower.match(/(?:renewal|window).*?(?:to|at)\s+(\d+)\s*(?:days?)?/);
     if (renewalMatch) {
       updates['renewal_window_days'] = parseInt(renewalMatch[1]);
     }
 
-    // expansion threshold patterns
-    const expansionMatch = lower.match(/(?:expansion|upsell).*?(?:threshold|trigger|at|to)\s+(\d+(?:\.\d+)?)\s*%?/);
-    if (expansionMatch) {
-      let val = parseFloat(expansionMatch[1]);
+    // pricing upsell ratio
+    const pricingMatch = lower.match(/(?:pricing|price).*?(?:ratio|threshold|at|to)\s+(\d+(?:\.\d+)?)\s*%?/);
+    if (pricingMatch) {
+      let val = parseFloat(pricingMatch[1]);
       if (val > 1) val = val / 100;
-      updates['expansion_threshold'] = val;
-    }
-
-    // churn login threshold
-    const loginMatch = lower.match(/(?:churn|login).*?(?:threshold|below|under|at)\s+(\d+)/);
-    if (loginMatch) {
-      updates['churn_login_threshold'] = parseInt(loginMatch[1]);
+      updates['pricing_upsell_ratio'] = val;
     }
 
     return Object.keys(updates).length > 0 ? updates : null;
@@ -80,14 +82,14 @@ ${configStr}
 USER INSTRUCTION: "${instruction}"
 
 Parse this instruction and determine which config values to update. Valid keys:
-- underutilizing_threshold (decimal 0-1, e.g. 0.55 for 55%)
-- expansion_threshold (decimal 0-1, e.g. 1.0 for 100%)
+- churn_usage_threshold (decimal 0-1, e.g. 0.40 for 40% — accounts below this usage are flagged as churn risk)
+- expansion_usage_threshold (decimal 1+, e.g. 1.30 for 130% — accounts above this are flagged for seat expansion)
+- pricing_upsell_ratio (decimal 0-1, e.g. 0.70 — accounts priced below this fraction of product median get pricing upsell)
 - renewal_window_days (integer days, e.g. 90)
-- churn_login_threshold (integer, e.g. 3)
 
 Explain your reasoning, then output a JSON block:
 \`\`\`json
-{"updates": {"underutilizing_threshold": 0.55}}
+{"updates": {"churn_usage_threshold": 0.40}}
 \`\`\``;
 
         let fullText = '';
@@ -114,20 +116,18 @@ Explain your reasoning, then output a JSON block:
         }
       }
 
-      // Fallback to regex parsing
       if (!configUpdates) {
         sendSSE(res, { type: 'thinking', text: '\nParsing instruction with pattern matching...\n' });
         configUpdates = parseConfigFromInstruction(instruction);
       }
 
       if (!configUpdates || Object.keys(configUpdates).length === 0) {
-        sendSSE(res, { type: 'thinking', text: '\nCould not parse a config change from that instruction. Try: "lower the underutilizing bar to 55%" or "change renewal window to 90 days"\n' });
+        sendSSE(res, { type: 'thinking', text: '\nCould not parse a config change from that instruction. Try: "set churn threshold to 40%" or "change renewal window to 90 days"\n' });
         sendSSE(res, { type: 'complete', changed_count: 0 });
         res.end();
         return;
       }
 
-      // Apply config updates
       for (const [key, value] of Object.entries(configUpdates)) {
         const oldRow = sqlite.prepare('SELECT value FROM qualification_config WHERE key = ?').get(key) as { value: string } | undefined;
         const oldValue = oldRow?.value ?? 'unknown';
@@ -139,102 +139,11 @@ Explain your reasoning, then output a JSON block:
 
       await runEngine();
 
-      // Count changed accounts (is_new)
       const changed = sqlite.prepare('SELECT COUNT(*) as cnt FROM qualification_results WHERE is_new = 1').get() as { cnt: number };
 
       sendSSE(res, { type: 'rerun_complete', changed_count: changed.cnt });
       sendSSE(res, { type: 'thinking', text: `✓ Engine re-run complete. ${changed.cnt} accounts changed signal.\n` });
       sendSSE(res, { type: 'complete', changed_count: changed.cnt });
-    } catch (err) {
-      sendSSE(res, { type: 'error', message: String(err) });
-    }
-    res.end();
-  });
-
-  // POST /api/agent/rep-brief — SSE stream
-  router.post('/rep-brief', async (req: Request, res: Response) => {
-    startSSE(res);
-    try {
-      const { account_id, instruction } = req.body as { account_id: string; instruction?: string };
-
-      const account = sqlite.prepare(`
-        SELECT a.*, qr.signal, qr.recommended_action, qr.reasons,
-               cp.churn_probability, cp.feature1_name, cp.feature1_shap
-        FROM accounts a
-        LEFT JOIN qualification_results qr ON a.account_id = qr.account_id
-        LEFT JOIN churn_predictions cp ON a.account_id = cp.account_id
-        WHERE a.account_id = ?
-      `).get(account_id) as Record<string, unknown> | undefined;
-
-      if (!account) {
-        sendSSE(res, { type: 'error', message: 'Account not found' });
-        res.end();
-        return;
-      }
-
-      const apiKey = process.env.ANTHROPIC_API_KEY;
-      const util = account.seat_count ? Math.round((Number(account.seats_active) / Number(account.seat_count)) * 100) : 0;
-      const endDate = new Date(account.contract_end_date as string);
-      const daysToRenewal = Math.round((endDate.getTime() - Date.now()) / 86400000);
-
-      if (apiKey) {
-        const client = new Anthropic({ apiKey });
-        const prompt = instruction
-          ? `Update the sales strategy for account "${account.account_name}":
-             Current ARR: $${Number(account.arr).toLocaleString()}
-             Seat utilization: ${util}%
-             Days to renewal: ${daysToRenewal}
-             Signal: ${account.signal}
-
-             New instruction: ${instruction}
-
-             Provide an updated 2-3 sentence strategy recommendation and suggested ARR target.`
-          : `Write a brief 2-3 sentence account narrative for a sales rep:
-             Account: ${account.account_name} (${account.tier} tier, ${account.product})
-             ARR: $${Number(account.arr).toLocaleString()}, Seat utilization: ${util}%
-             Days to renewal: ${daysToRenewal}
-             Signal: ${account.signal}
-             Recommended action: ${account.recommended_action}
-
-             Be specific, data-driven, and action-oriented. Focus on what the rep should do next.`;
-
-        const stream = await client.messages.stream({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 500,
-          messages: [{ role: 'user', content: prompt }],
-        });
-
-        for await (const event of stream) {
-          if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-            sendSSE(res, { type: 'text', text: event.delta.text });
-          }
-        }
-      } else {
-        // Templated fallback
-        const narratives: Record<string, string> = {
-          churn_risk: `${account.account_name} is showing critical disengagement signals — only ${account.logins_90d} logins in the last 90 days with ${util}% seat utilization. Immediate executive outreach is required to understand root cause and present a retention offer before the ${daysToRenewal}-day renewal window closes.`,
-          expansion_ready: `${account.account_name} is hitting capacity constraints at ${util}% seat utilization, signaling strong product-market fit and an organic upsell opportunity. With ${daysToRenewal} days to renewal, this is the ideal moment to introduce a seat expansion or tier upgrade — their current usage trajectory justifies the conversation.`,
-          underutilizing: `${account.account_name} is only utilizing ${util}% of their licensed seats, which puts renewal at risk if value isn't demonstrated before the ${daysToRenewal}-day window. Prioritize an adoption health review, activate dormant users, and connect them with a CSM for hands-on enablement.`,
-          renewal_prep: `${account.account_name} has entered the renewal window with ${daysToRenewal} days remaining and ${util}% seat utilization — a solid foundation for renewal at or above current ARR. Begin stakeholder alignment now, prepare a QBR deck highlighting ROI, and confirm decision-maker availability.`,
-          healthy: `${account.account_name} is performing well at ${util}% utilization with ${daysToRenewal} days to renewal — no immediate risk, but a proactive touchpoint will deepen the relationship. Share upcoming roadmap features and identify internal champions who can sponsor expansion when the time is right.`,
-        };
-
-        const text = narratives[account.signal as string] || narratives['healthy'];
-        for (const word of text.split(' ')) {
-          sendSSE(res, { type: 'text', text: word + ' ' });
-          await new Promise((r) => setTimeout(r, 20));
-        }
-      }
-
-      if (instruction) {
-        // Return suggested ARR adjustment
-        const arrAdjustment = account.signal === 'expansion_ready'
-          ? Math.round(Number(account.arr) * 1.25)
-          : Number(account.arr);
-        sendSSE(res, { type: 'arr_target', value: arrAdjustment });
-      }
-
-      sendSSE(res, { type: 'complete' });
     } catch (err) {
       sendSSE(res, { type: 'error', message: String(err) });
     }

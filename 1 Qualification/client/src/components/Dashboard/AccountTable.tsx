@@ -1,13 +1,15 @@
-import { useState } from 'react';
-import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
-import { RefreshCw, TrendingUp, AlertTriangle, Zap, Clock, Heart } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
 import { api, type Account } from '../../lib/api';
+import AgentConsole from './AgentConsole';
+
+const PAGE_SIZE = 25;
 
 interface Props {
   accounts: Account[];
   loading: boolean;
   onSelectAccount: (a: Account) => void;
-  onViewChurn: (a: Account) => void;
   onAccountsUpdate: (accounts: Account[]) => void;
 }
 
@@ -18,52 +20,40 @@ function formatArr(arr: number): string {
 }
 
 function daysLabel(contractEndDate: string): { label: string; days: number; color: string } {
-  const end = new Date(contractEndDate);
-  const days = Math.round((end.getTime() - Date.now()) / 86400000);
+  const end = new Date(contractEndDate + 'T00:00:00Z');
+  const now = new Date();
+  const todayUTC = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  const days = Math.round((end.getTime() - todayUTC) / 86400000);
   const label = days < 0 ? `${Math.abs(days)}d overdue` : `${days}d`;
-  const color = days < 0 ? 'text-red-600 bg-red-50' : days < 30 ? 'text-red-600 bg-red-50' : days < 90 ? 'text-amber-600 bg-amber-50' : 'text-green-700 bg-green-50';
+  const color = days < 0 ? 'text-red-600' : days <= 120 ? 'text-amber-700' : 'text-slate-500';
   return { label, days, color };
 }
 
-function SignalBadge({ signal }: { signal: string }) {
-  const config: Record<string, { label: string; icon: React.ReactNode; class: string }> = {
-    churn_risk: { label: 'Churn Risk', icon: <AlertTriangle className="w-3 h-3" />, class: 'bg-red-100 text-red-700 border border-red-200' },
-    expansion_ready: { label: 'Expansion Ready', icon: <TrendingUp className="w-3 h-3" />, class: 'bg-green-100 text-green-700 border border-green-200' },
-    underutilizing: { label: 'Underutilizing', icon: <Zap className="w-3 h-3" />, class: 'bg-amber-100 text-amber-700 border border-amber-200' },
-    renewal_prep: { label: 'Renewal Prep', icon: <Clock className="w-3 h-3" />, class: 'bg-amber-100 text-amber-700 border border-amber-200' },
-    healthy: { label: 'Healthy', icon: <Heart className="w-3 h-3" />, class: 'bg-green-100 text-green-700 border border-green-200' },
-  };
-  const c = config[signal] ?? config['healthy'];
-  return (
-    <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full ${c.class}`}>
-      {c.icon}
-      {c.label}
-    </span>
-  );
-}
+const PLAYBOOK_CONFIG: Record<string, { label: string; class: string }> = {
+  churn_risk:      { label: 'Flag Rep',       class: 'text-red-600 font-bold' },
+  expansion_ready: { label: 'Upsell Seats',   class: 'text-green-600 font-bold' },
+  pricing_upsell:  { label: 'Pricing Upsell', class: 'text-amber-600 font-bold' },
+  product_upsell:  { label: 'Product Upsell', class: 'text-emerald-600 font-bold' },
+  flat_renewal:    { label: 'Flat Renewal',   class: 'text-blue-600 font-bold' },
+};
 
-function TierBadge({ tier }: { tier: string }) {
-  const colors: Record<string, string> = {
-    Starter: 'bg-slate-100 text-slate-600',
-    Growth: 'bg-blue-100 text-blue-700',
-    Enterprise: 'bg-purple-100 text-purple-700',
-  };
-  return (
-    <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${colors[tier] ?? 'bg-slate-100 text-slate-600'}`}>
-      {tier}
-    </span>
-  );
-}
+const TONE_CONFIG: Record<number, { label: string }> = {
+  0: { label: 'Bad' },
+  1: { label: 'Neutral' },
+  2: { label: 'Positive' },
+};
 
 function SeatUsageBar({ active, total }: { active: number; total: number }) {
   const pct = total > 0 ? (active / total) * 100 : 0;
   const clampedPct = Math.min(100, pct);
-  const barColor = pct >= 100 ? 'bg-green-500' : pct < 50 ? 'bg-amber-400' : 'bg-blue-400';
+  const barColor = pct >= 125 ? 'bg-green-500' : pct < 50 ? 'bg-red-400' : 'bg-blue-400';
 
   return (
     <div>
       <div className="flex items-center gap-2 mb-0.5">
-        <span className="text-xs font-semibold text-slate-700">{Math.round(pct)}%</span>
+        <span className={`text-xs font-semibold ${pct >= 125 ? 'text-green-600' : pct < 50 ? 'text-red-600' : 'text-slate-700'}`}>
+          {Math.round(pct)}%
+        </span>
         <span className="text-xs text-slate-400">{active}/{total}</span>
       </div>
       <div className="h-1.5 w-24 bg-gray-100 rounded-full overflow-hidden">
@@ -76,8 +66,14 @@ function SeatUsageBar({ active, total }: { active: number; total: number }) {
   );
 }
 
-export default function AccountTable({ accounts, loading, onSelectAccount, onViewChurn, onAccountsUpdate }: Props) {
+export default function AccountTable({ accounts, loading, onSelectAccount, onAccountsUpdate }: Props) {
   const [simulating, setSimulating] = useState(false);
+  const [page, setPage] = useState(1);
+
+  useEffect(() => { setPage(1); }, [accounts]);
+
+  const totalPages = Math.max(1, Math.ceil(accounts.length / PAGE_SIZE));
+  const pageAccounts = accounts.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   async function simulate() {
     setSimulating(true);
@@ -101,7 +97,9 @@ export default function AccountTable({ accounts, loading, onSelectAccount, onVie
       <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-xl font-semibold text-slate-900">Account Command Center</h1>
-          <p className="text-sm text-slate-500">{accounts.length} accounts · Qualification engine results</p>
+          <p className="text-sm text-slate-500">
+            {accounts.length} accounts · showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, accounts.length)}
+          </p>
         </div>
         <button
           onClick={simulate}
@@ -113,6 +111,10 @@ export default function AccountTable({ accounts, loading, onSelectAccount, onVie
         </button>
       </div>
 
+      <div className="mb-4">
+        <AgentConsole onAccountsUpdate={onAccountsUpdate} />
+      </div>
+
       <div className="rounded-xl border border-gray-200 overflow-hidden">
         <table className="w-full text-sm">
           <thead>
@@ -121,104 +123,124 @@ export default function AccountTable({ accounts, loading, onSelectAccount, onVie
               <th className="text-left px-4 py-3 text-slate-500 font-medium text-xs">Product</th>
               <th className="text-left px-4 py-3 text-slate-500 font-medium text-xs">ARR</th>
               <th className="text-left px-4 py-3 text-slate-500 font-medium text-xs">Seat Usage</th>
+              <th className="text-left px-4 py-3 text-slate-500 font-medium text-xs">Tone</th>
               <th className="text-left px-4 py-3 text-slate-500 font-medium text-xs">Renewal</th>
-              <th className="text-left px-4 py-3 text-slate-500 font-medium text-xs">Signal</th>
-              <th className="text-left px-4 py-3 text-slate-500 font-medium text-xs">Recommended Action</th>
+              <th className="text-left px-4 py-3 text-slate-500 font-medium text-xs">Playbook</th>
               <th className="px-4 py-3" />
             </tr>
           </thead>
-          <LayoutGroup>
-            <tbody>
-              <AnimatePresence mode="popLayout">
-                {accounts.slice(0, 50).map((acct) => {
-                  const renewal = daysLabel(acct.contract_end_date);
-                  return (
-                    <motion.tr
-                      key={acct.account_id}
-                      layout
-                      initial={{ opacity: 0, y: -10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0 }}
-                      className="border-b border-gray-50 hover:bg-gray-50/70 cursor-pointer"
-                      onClick={() => onSelectAccount(acct)}
-                    >
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          {acct.is_new === 1 && (
-                            <motion.span
-                              initial={{ scale: 0 }}
-                              animate={{ scale: 1 }}
-                              className="text-xs font-bold bg-[hsl(24,95%,53%)] text-white px-1.5 py-0.5 rounded-full"
-                            >
-                              NEW
-                            </motion.span>
-                          )}
-                          <div>
-                            <div className="font-medium text-slate-900 text-xs">{acct.account_name}</div>
-                            <TierBadge tier={acct.tier} />
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-slate-600 text-xs">{acct.product}</td>
-                      <td className="px-4 py-3 font-semibold text-slate-900 text-sm">{formatArr(acct.arr)}</td>
-                      <td className="px-4 py-3">
-                        <SeatUsageBar active={acct.seats_active} total={acct.seat_count} />
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex flex-col gap-0.5">
-                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full w-fit ${renewal.color}`}>
-                            {renewal.label}
-                          </span>
-                          <span className="text-xs text-slate-400">
-                            {new Date(acct.contract_end_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        {acct.signal ? <SignalBadge signal={acct.signal} /> : <span className="text-xs text-slate-400">—</span>}
-                      </td>
-                      <td className="px-4 py-3 text-slate-500 text-xs max-w-[220px]">
-                        <span className="line-clamp-2">{acct.recommended_action}</span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                          <button
-                            className="text-xs text-slate-500 hover:text-slate-900 border border-gray-200 px-2 py-1 rounded-lg hover:border-slate-400 transition-colors"
-                            onClick={() => onSelectAccount(acct)}
+          <tbody>
+            <AnimatePresence>
+              {pageAccounts.map((acct) => {
+                const renewal = daysLabel(acct.contract_end_date);
+                const playbook = acct.signal ? PLAYBOOK_CONFIG[acct.signal] : null;
+                const tone = TONE_CONFIG[acct.tone] ?? TONE_CONFIG[1];
+                return (
+                  <motion.tr
+                    key={acct.account_id}
+                    initial={{ opacity: 0, y: -8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    className="border-b border-gray-50 hover:bg-gray-50/70 cursor-pointer"
+                    onClick={() => onSelectAccount(acct)}
+                  >
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        {acct.is_new === 1 && (
+                          <motion.span
+                            initial={{ scale: 0 }}
+                            animate={{ scale: 1 }}
+                            className="text-xs font-bold bg-[hsl(24,95%,53%)] text-white px-1.5 py-0.5 rounded-full"
                           >
-                            Brief
-                          </button>
-                          {acct.signal === 'churn_risk' && (
-                            <button
-                              className="text-xs text-red-600 hover:text-red-700 border border-red-200 px-2 py-1 rounded-lg hover:border-red-400 transition-colors"
-                              onClick={() => onViewChurn(acct)}
-                            >
-                              ML ↗
-                            </button>
-                          )}
-                          {(acct.churned_predicted === 1) && acct.signal !== 'churn_risk' && (
-                            <button
-                              className="text-xs text-orange-600 hover:text-orange-700 border border-orange-200 px-2 py-1 rounded-lg transition-colors"
-                              onClick={() => onViewChurn(acct)}
-                            >
-                              ML ↗
-                            </button>
-                          )}
+                            NEW
+                          </motion.span>
+                        )}
+                        <div>
+                          <div className="font-medium text-slate-900 text-xs">{acct.account_name}</div>
+                          <div className="text-xs text-slate-400">{acct.tier}</div>
                         </div>
-                      </td>
-                    </motion.tr>
-                  );
-                })}
-              </AnimatePresence>
-            </tbody>
-          </LayoutGroup>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-600 text-xs">{acct.product}</td>
+                    <td className="px-4 py-3 font-semibold text-slate-900 text-sm">{formatArr(acct.arr)}</td>
+                    <td className="px-4 py-3">
+                      <SeatUsageBar active={acct.seats_active} total={acct.seat_count} />
+                    </td>
+                    <td className="px-4 py-3 text-xs text-slate-500">{tone.label}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-col gap-0.5">
+                        <span className={`text-xs font-medium ${renewal.color}`}>{renewal.label}</span>
+                        <span className="text-xs text-slate-400">
+                          {new Date(acct.contract_end_date + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      {playbook
+                        ? <span className={`text-sm ${playbook.class}`}>{playbook.label}</span>
+                        : <span className="text-xs text-slate-400">—</span>
+                      }
+                    </td>
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        className="text-xs text-slate-500 hover:text-slate-900 border border-gray-200 px-2 py-1 rounded-lg hover:border-slate-400 transition-colors"
+                        onClick={() => onSelectAccount(acct)}
+                      >
+                        Plan →
+                      </button>
+                    </td>
+                  </motion.tr>
+                );
+              })}
+            </AnimatePresence>
+          </tbody>
         </table>
-        {accounts.length > 50 && (
-          <div className="px-4 py-3 border-t border-gray-100 text-xs text-slate-400">
-            Showing 50 of {accounts.length} accounts
-          </div>
-        )}
       </div>
+
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-1 mt-4">
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page === 1}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-default transition-colors"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+
+          {Array.from({ length: totalPages }, (_, i) => i + 1)
+            .filter((n) => n === 1 || n === totalPages || Math.abs(n - page) <= 2)
+            .reduce<(number | 'ellipsis')[]>((acc, n, idx, arr) => {
+              if (idx > 0 && n - (arr[idx - 1] as number) > 1) acc.push('ellipsis');
+              acc.push(n);
+              return acc;
+            }, [])
+            .map((item, idx) =>
+              item === 'ellipsis' ? (
+                <span key={`ellipsis-${idx}`} className="px-1 text-xs text-slate-400">…</span>
+              ) : (
+                <button
+                  key={item}
+                  onClick={() => setPage(item as number)}
+                  className={`min-w-[32px] h-8 px-2 rounded-lg text-xs font-medium transition-colors ${
+                    page === item
+                      ? 'bg-[hsl(24,95%,53%)] text-white'
+                      : 'text-slate-600 hover:bg-gray-100'
+                  }`}
+                >
+                  {item}
+                </button>
+              )
+            )}
+
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page === totalPages}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-default transition-colors"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
