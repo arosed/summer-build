@@ -90,7 +90,6 @@ Churn and expansion fire regardless of days-to-renewal. The cohort rules (pricin
 | File | Purpose |
 |---|---|
 | `server/src/engine/engine.ts` | Deterministic qualification engine — pure functions, returns signal + reasons |
-| `server/src/engine/engine.test.ts` | 17 unit tests covering all 5 signal types + null + medians + day math |
 | `server/src/db/seed.ts` | Two-phase seed: bulk accounts → compute medians → craft cohort accounts |
 | `server/src/db/schema.ts` | Drizzle ORM schema — source of truth for DB shape |
 | `server/src/db/init.ts` | Creates tables on startup |
@@ -103,6 +102,7 @@ Churn and expansion fire regardless of days-to-renewal. The cohort rules (pricin
 | `client/src/components/RenewalManager/` | RenewalManagerDashboard, RenewalManagerAccountList |
 | `client/src/components/RenewalPlan/RenewalPlanView.tsx` | PDF-aesthetic renewal plan page |
 | `client/src/components/RepBrief/ArrChart.tsx` | ARR trend chart (reused by RenewalPlanView) |
+| `client/src/components/AgentPassthrough/AgentPassthrough.tsx` | Full-screen agent handoff screen (reached via "Approve Plan" in Renewal Manager) |
 
 ## Navigation state machine (App.tsx)
 
@@ -112,9 +112,10 @@ type Screen =
   | { view: 'renewal-manager' }
   | { view: 'renewal-manager-list'; category: string }
   | { view: 'renewal-plan'; accountId: string; from: 'dashboard' | 'renewal-manager-list' }
+  | { view: 'agent-passthrough' }
 ```
 
-No React Router — `navigate(screen)` is passed as a prop down the tree.
+No React Router — `navigate(screen)` is passed as a prop down the tree. `agent-passthrough` is reached via "Approve Plan" in the Renewal Manager dashboard.
 
 ## ARR projection multipliers (renewal-manager endpoint)
 
@@ -139,11 +140,3 @@ return Math.round((end.getTime() - todayUTC) / 86400000);
 
 Both seed and engine use this pattern. The 120-day cohort match (`days === 120`) is exact.
 
-## Tests
-
-```bash
-cd "1 Qualification/server"
-npx vitest run
-```
-
-17 tests in `engine.test.ts`. No other test files — the old `model.test.ts` and `normalizer.test.ts` were deleted with the ML/normalizer code.
