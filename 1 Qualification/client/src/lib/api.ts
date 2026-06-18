@@ -102,4 +102,8 @@ export const api = {
         body: JSON.stringify({ instruction }),
       }),
   },
+  config: {
+    reset: (): Promise<{ ok: boolean }> =>
+      fetch(`${API}/config/reset`, { method: 'POST' }).then((r) => r.json()),
+  },
 };

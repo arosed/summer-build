@@ -108,6 +108,59 @@ function buildRationale(acct: RenewalPlanAccount): string {
   }
 }
 
+const NEWS_STORIES: Array<{
+  headline: (name: string) => string;
+  body: (name: string) => string;
+  tag: string;
+}> = [
+  {
+    headline: (n) => `${n} confirms layoffs in latest restructuring`,
+    body: (n) => `Reports over the past several weeks indicate ${n} has reduced its workforce by approximately 12%, citing macroeconomic pressure and a shift toward core business lines. Budget freezes on software renewals are expected as the company consolidates. Watch for downsell risk or delayed renewal engagement from procurement.`,
+    tag: 'Downsell Risk',
+  },
+  {
+    headline: (n) => `${n} CFO steps down amid cost review`,
+    body: (n) => `${n}'s CFO departed last month with no named successor. Budget authority has been temporarily centralized, slowing discretionary spend approvals across the organization. Procurement has been directed to hold or renegotiate vendor renewals pending new finance leadership.`,
+    tag: 'Renewal Hold',
+  },
+  {
+    headline: (n) => `${n} cuts SaaS spend following investor pressure`,
+    body: (n) => `Following pressure from shareholders, ${n} has launched a vendor consolidation initiative targeting a 20%+ reduction in SaaS expenditure. Non-core platform subscriptions are under review. This account's renewal may face scrutiny even if engagement has historically been adequate.`,
+    tag: 'Churn Risk',
+  },
+  {
+    headline: (n) => `${n} acquired — integration uncertainty expected`,
+    body: (n) => `${n} has entered an acquisition agreement expected to close this quarter. During integration, vendor decisions are typically frozen or deferred to the acquirer's procurement team. Champion relationships may be disrupted as headcount and tooling are rationalized post-close.`,
+    tag: 'Champion Risk',
+  },
+  {
+    headline: (n) => `${n} misses quarterly targets, signals broad budget tightening`,
+    body: (n) => `${n} reported earnings below analyst expectations, prompting management to announce a cost reduction program across all departments. Software and services budgets are reportedly being reduced by 15–25%. Expect the renewal conversation to include pricing pushback or a request to reduce seat count.`,
+    tag: 'Downsell Risk',
+  },
+  {
+    headline: (n) => `Key champion at ${n} has left the organization`,
+    body: (n) => `LinkedIn activity and internal signals indicate the primary advocate for this platform at ${n} has departed. Without an active internal champion, renewal momentum may stall and the account may go dark before outreach. Recommend re-establishing contact and mapping new stakeholders before initiating renewal discussions.`,
+    tag: 'Champion Lost',
+  },
+  {
+    headline: (n) => `${n} under regulatory review, deferring major spend`,
+    body: (n) => `${n} is currently subject to a regulatory inquiry in its primary market. Legal and compliance overhead has consumed discretionary budget and the company has paused non-essential vendor renewals while the review is ongoing. Timeline for resolution is unclear — approach renewal conversations with flexibility on timing.`,
+    tag: 'Spend Freeze',
+  },
+  {
+    headline: (n) => `${n} product pivot may reduce platform dependency`,
+    body: (n) => `Recent public statements from ${n}'s leadership suggest a significant product strategy shift that could reduce reliance on current tooling. If the pivot proceeds, seat requirements may contract substantially at renewal. An early discovery call is recommended to understand the evolving use case before presenting terms.`,
+    tag: 'Scope Reduction',
+  },
+];
+
+function buildNewsAnalysis(acct: RenewalPlanAccount) {
+  const idNum = parseInt(acct.account_id.replace('acct_', ''), 10) || 0;
+  const story = NEWS_STORIES[idNum % NEWS_STORIES.length];
+  return { headline: story.headline(acct.account_name), body: story.body(acct.account_name), tag: story.tag };
+}
+
 const ACTION_LABEL: Record<string, string> = {
   churn_risk:      'FLAG REP',
   expansion_ready: 'UPSELL SEATS',
@@ -213,6 +266,7 @@ export default function RenewalPlanView({ accountId, onClose }: Props) {
   const actionLabel = acct ? (ACTION_LABEL[acct.signal ?? ''] ?? 'REVIEW') : '';
   const toneLabel = acct?.tone_label ?? 'Neutral';
   const metrics = acct ? buildMetrics(acct) : [];
+  const newsStory = acct?.signal === 'churn_risk' ? buildNewsAnalysis(acct) : null;
 
   return (
     <>
@@ -269,7 +323,22 @@ export default function RenewalPlanView({ accountId, onClose }: Props) {
                 <p className="text-sm leading-relaxed text-gray-700">{rationale}</p>
               </div>
 
-              {/* Section 3: Key Metrics */}
+              {/* Section 3: Market Intelligence (churn risk only) */}
+              {newsStory && (
+                <div className="mb-7 pb-7 border-b border-gray-200">
+                  <div className="text-xs font-semibold tracking-widest text-gray-400 uppercase mb-4">Market Intelligence</div>
+                  <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-4">
+                    <div className="flex items-start justify-between gap-3 mb-2">
+                      <div className="text-sm font-semibold text-gray-900 leading-snug">{newsStory.headline}</div>
+                      <span className="shrink-0 text-xs font-medium text-amber-700 bg-amber-100 border border-amber-200 rounded-full px-2 py-0.5">{newsStory.tag}</span>
+                    </div>
+                    <p className="text-sm leading-relaxed text-gray-700">{newsStory.body}</p>
+                    <div className="mt-3 text-xs text-gray-400">AI-synthesized signal · Verify before outreach</div>
+                  </div>
+                </div>
+              )}
+
+              {/* Section 4: Key Metrics */}
               <div className="mb-7 pb-7 border-b border-gray-200">
                 <div className="text-xs font-semibold tracking-widest text-gray-400 uppercase mb-4">Key Metrics</div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -289,7 +358,7 @@ export default function RenewalPlanView({ accountId, onClose }: Props) {
                 </div>
               </div>
 
-              {/* Section 4: ARR History */}
+              {/* Section 5: ARR History */}
               <div className="mb-7 pb-7 border-b border-gray-200">
                 <div className="text-xs font-semibold tracking-widest text-gray-400 uppercase mb-4">ARR History</div>
                 {acct.historical_arr && acct.historical_arr.length > 0 ? (
@@ -299,7 +368,7 @@ export default function RenewalPlanView({ accountId, onClose }: Props) {
                 )}
               </div>
 
-              {/* Section 5: Contract History */}
+              {/* Section 6: Contract History */}
               <div className="mb-8">
                 <div className="text-xs font-semibold tracking-widest text-gray-400 uppercase mb-4">Contract History</div>
                 <ContractHistoryTable data={acct.historical_arr ?? []} />

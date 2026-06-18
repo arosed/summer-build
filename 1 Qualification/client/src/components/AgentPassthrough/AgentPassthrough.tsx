@@ -124,7 +124,7 @@ export default function AgentPassthrough({ navigate }: Props) {
 
   useEffect(() => {
     api.accounts.list().then((all) => {
-      const signaled = all.filter((a) => a.signal != null);
+      const signaled = all.filter((a) => !!a.signal);
       setChurnAccounts(signaled.filter((a) => a.signal === 'churn_risk'));
       setAgentAccounts(signaled.filter((a) => a.signal !== 'churn_risk'));
       setLoading(false);

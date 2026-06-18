@@ -78,6 +78,20 @@ async function main() {
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
+  app.post('/api/config/reset', async (_req, res) => {
+    const defaults: Record<string, string> = {
+      churn_usage_threshold: '0.5',
+      expansion_usage_threshold: '1.25',
+      pricing_upsell_ratio: '0.75',
+      renewal_window_days: '120',
+    };
+    for (const [key, value] of Object.entries(defaults)) {
+      sqlite.prepare('UPDATE qualification_config SET value = ? WHERE key = ?').run(value, key);
+    }
+    await runQualificationEngine();
+    res.json({ ok: true });
+  });
+
   app.listen(PORT, () => {
     console.log(`✓ Pareto server running on http://localhost:${PORT}`);
   });

@@ -22,11 +22,9 @@ const COMPANY_SUFFIXES = [
   'Ventures', 'Partners', 'Studio', 'Hub', 'Cloud', 'AI', 'Analytics', 'Data', 'Media', 'Networks',
 ];
 
-let nameCounter = 0;
-function companyName(): string {
-  const p = COMPANY_PREFIXES[nameCounter % COMPANY_PREFIXES.length];
-  const s = COMPANY_SUFFIXES[Math.floor(nameCounter / COMPANY_PREFIXES.length) % COMPANY_SUFFIXES.length];
-  nameCounter++;
+function companyName(id: number): string {
+  const p = COMPANY_PREFIXES[Math.floor(seededRand(id * 53) * COMPANY_PREFIXES.length)];
+  const s = COMPANY_SUFFIXES[Math.floor(seededRand(id * 71) * COMPANY_SUFFIXES.length)];
   return `${p} ${s}`;
 }
 
@@ -109,7 +107,7 @@ function makeAccount(
 
   return {
     account_id: `acct_${String(id).padStart(4, '0')}`,
-    account_name: companyName(),
+    account_name: companyName(id),
     arr,
     mrr,
     seat_count,

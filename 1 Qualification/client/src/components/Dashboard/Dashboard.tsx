@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { BarChart3 } from 'lucide-react';
+import { BarChart3, RotateCcw } from 'lucide-react';
 import { api, type Account } from '../../lib/api';
 import AccountTable from './AccountTable';
 import type { Screen } from '../../App';
@@ -11,6 +11,7 @@ interface Props {
 export default function Dashboard({ navigate }: Props) {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
+  const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
     loadAccounts();
@@ -23,6 +24,13 @@ export default function Dashboard({ navigate }: Props) {
     setLoading(false);
   }
 
+  async function handleReset() {
+    setResetting(true);
+    await api.config.reset();
+    await loadAccounts();
+    setResetting(false);
+  }
+
   return (
     <div className="min-h-screen bg-white flex flex-col">
       {/* Nav */}
@@ -31,6 +39,15 @@ export default function Dashboard({ navigate }: Props) {
         <span className="mx-2 text-slate-300">·</span>
         <span className="text-slate-600 font-light">Qualification Agent</span>
         <div className="ml-auto flex items-center gap-3">
+          <button
+            onClick={handleReset}
+            disabled={resetting}
+            title="Reset qualification config to defaults"
+            className="flex items-center gap-1.5 border border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-700 px-3 py-1.5 rounded-lg text-sm transition-colors disabled:opacity-50"
+          >
+            <RotateCcw className={`w-3.5 h-3.5 ${resetting ? 'animate-spin' : ''}`} />
+            Reset Config
+          </button>
           <button
             onClick={() => navigate({ view: 'renewal-manager' })}
             className="flex items-center gap-1.5 border border-[hsl(24,95%,53%)] text-[hsl(24,95%,53%)] hover:bg-[hsl(24,95%,53%)] hover:text-white font-medium px-3 py-1.5 rounded-lg text-sm transition-colors"
